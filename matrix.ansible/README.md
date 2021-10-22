@@ -4,7 +4,8 @@
 
 ```sh
 # package
-yum -q -y install epel-release >>/dev/null && wait; yum -q -y install ansible git sshpass 2 >>/dev/null
+yum -q -y install epel-release 2>>/dev/null
+yum -q -y install ansible git sshpass 2>>/dev/null
 
 # ssh
 net='192.168.100.0'
