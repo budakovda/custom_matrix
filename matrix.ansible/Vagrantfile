@@ -1,0 +1,84 @@
+# -*- mode: ruby -*-
+# vi: set ft=ruby:
+home = ENV['HOME']
+
+MACHINES = {
+  :'synapse1' => {
+      :box_name => "dbudakov/centos-kernel",
+      :ip_addr => '192.168.100.116',
+  },
+  :'synapse2' => {
+	:box_name => "dbudakov/centos-kernel",
+	:ip_addr => '192.168.100.117',
+},
+}
+
+Vagrant.configure("2") do |config|
+
+	MACHINES.each do |boxname, boxconfig|
+		config.vm.define boxname do |box|
+
+			box.vm.box = boxconfig[:box_name]
+			box.vm.host_name = boxname.to_s
+
+			box.vm.network "private_network", ip:boxconfig[:ip_addr]
+			
+			box.vm.provider :virtualbox do |vb|
+				vb.name = boxname.to_s
+				vb.customize ["modifyvm", :id, "--memory", "4096"]
+				vb.customize ["modifyvm", :id, "--cpus", "2"]
+			end
+			
+			case boxname.to_s
+			when "synapse2"
+				box.vm.provision "shell", inline: <<SHELL
+				# docker
+				if ! docker -v 2>>/dev/null  ; then
+					sudo yum -q check-update >>/dev/null
+					curl -fsSL https://get.docker.com/ | sed 's/sleep 20/sleep 2/g' | sh 2>>/dev/null
+					sudo usermod -aG docker root 
+					sudo systemctl start docker
+					sudo systemctl enable docker
+				fi
+
+				# docker-compose
+				if ! docker-compose -v 2>>/dev/null ; then
+					sudo curl -sL "https://github.com/docker/compose/releases/download/1.25.5/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+					sudo chmod +x /usr/local/bin/docker-compose
+					sudo ln -s /usr/local/bin/docker-compose /usr/bin/docker-compose
+				fi
+
+				# docker registry home.org
+				echo '{"insecure-registries": ["home.org:443", "home.org"]}' >/etc/docker/daemon.json; systemctl restart docker;
+				echo 192.168.0.18 home.org >> /etc/hosts
+
+				# images
+				images=()
+				for i in ${images[@]}; do 
+					image=$(echo $i | awk -F / '{print $NF}'| awk -F: '{print $1}');
+					if ! curl -s 192.168.0.18/v2/_catalog | grep $image 2>>/dev/null ; then
+						docker pull $i
+						docker tag $i home.org/$image;
+						docker push home.org/$image;
+					fi
+				done;
+
+				# sshd and firewall
+				sed -i '/PasswordAuthentication/c PasswordAuthentication yes' /etc/ssh/sshd_config
+				sed -i '/PermitRootLogin/c PermitRootLogin yes' /etc/ssh/sshd_config
+				sed -i '/SELINUX/c SELINUX=disabled' /etc/selinux/config
+				systemctl restart sshd  
+				systemctl stop firewalld
+				setenforce 0
+SHELL
+			end
+			box.vm.provision "shell", inline: <<SHELL
+				# ssh
+				echo "UserKnownHostsFile /dev/null" >> /etc/ssh/ssh_config
+				echo "LogLevel QUIET" >> /etc/ssh/ssh_config
+				sed -i '/StrictHostKeyChecking/c StrictHostKeyChecking no' /etc/ssh/ssh_config
+				systemctl restart sshd 
+SHELL
+		end
+	end
+end
